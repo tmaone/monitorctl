@@ -1,4 +1,5 @@
-ddcctl: DDC monitor controls for the OSX command line
+monitorctl: DDC monitor controls for the OSX command line
+(considerably reduced fork of [ddcctl](https://github.com/kfix/ddcctl) to only work with dual monitors which are identical.
 ----
 Adjust your external monitors' built-in controls from the OSX shell:
 * brightness
