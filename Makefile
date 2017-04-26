@@ -1,6 +1,6 @@
 #!/bin/make -f
 
-CCFLAGS ?= -O0 -fsanitize
+CCFLAGS ?= -O0
 
 # PATH =+
 CC = clang

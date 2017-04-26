@@ -32,12 +32,13 @@ dispatch_semaphore_t DisplayQueue(CGDirectDisplayID displayID) {
     return queue;
 }
 
-bool requestFrameBuffers(CGDirectDisplayID displayID, IOI2CRequest *request){
+bool requestFrameBuffers(CGDirectDisplayID displayID,  IOI2CRequest *request, UInt64 displayNum){
 
     dispatch_semaphore_t queue = DisplayQueue(displayID);
     dispatch_semaphore_wait(queue, DISPATCH_TIME_FOREVER);
     bool result;
     IOItemCount busCount;
+    UInt64 fdisp = 0;
 
     io_service_t framebuffer; // https://developer.apple.com/reference/kernel/ioframebuffer
     io_iterator_t iter;
@@ -46,8 +47,6 @@ bool requestFrameBuffers(CGDirectDisplayID displayID, IOI2CRequest *request){
     kern_return_t err = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching(IOFRAMEBUFFER_CONFORMSTO), &iter);
     if (err != KERN_SUCCESS) return 0;
     // now recurse the IOReg tree
-
-    printf("D: recurse tree\n");
 
     while ((serv = IOIteratorNext(iter)) != MACH_PORT_NULL)
     {
@@ -58,8 +57,6 @@ bool requestFrameBuffers(CGDirectDisplayID displayID, IOI2CRequest *request){
         CFStringRef location = CFSTR("");
         CFStringRef serial = CFSTR("");
         Boolean success = 0;
-
-        printf("D: after init\n");
 
         // get metadata from IOreg node
         IORegistryEntryGetName(serv, name);
@@ -93,61 +90,53 @@ bool requestFrameBuffers(CGDirectDisplayID displayID, IOI2CRequest *request){
             continue;
         }
 
-        printf("D: success\n");
+        fdisp ++;
+
+        if ( fdisp != displayNum ){
+            CFRelease(info);
+            continue;
+        }
+        usleep(20000);
 
         servicePort = serv;
         framebuffer = serv;
         CFRelease(info);
         // break;
-        // usleep(20000);
-
         result = false;
 
         if (IOFBGetI2CInterfaceCount(framebuffer, &busCount) == KERN_SUCCESS) {
             IOOptionBits bus = 0;
 
-            printf("D: get ifs\n");
             while (bus < busCount) {
                 io_service_t interface;
                 if (IOFBCopyI2CInterfaceForBus(framebuffer, bus++, &interface) != KERN_SUCCESS)
                 continue;
                 // usleep(20000);
-                printf("D: 2st pass\n");
                 IOI2CConnectRef connect;
                 if (IOI2CInterfaceOpen(interface, kNilOptions, &connect) == KERN_SUCCESS) {
-                    printf("D:tototto\n");
-
                     result = (IOI2CSendRequest(connect, kNilOptions, request) == KERN_SUCCESS);
-                    printf("D:totdasdasdaotto\n");
-
                     IOI2CInterfaceClose(connect, kNilOptions);
-                    printf("D:dadadad\n");
-
                 }
-
                 // usleep(20000);
-                printf("D: second\n");
                 IOObjectRelease(interface);
                 if (result) break;
             }
         }
-
-        printf("D: before release\n");
-
         IOObjectRelease(framebuffer);
         if (request->replyTransactionType == kIOI2CNoTransactionType)
         usleep(20000);
         dispatch_semaphore_signal(queue);
+        break;
     }
     IOObjectRelease(iter);
     return result && request->result == KERN_SUCCESS;
 }
 
-bool DisplayRequest(CGDirectDisplayID displays[], uint32_t num,  IOI2CRequest *request) {
-    return requestFrameBuffers(displays[0], request);
+bool DisplayRequest(CGDirectDisplayID display,  IOI2CRequest *request, UInt64 displayNum) {
+    return requestFrameBuffers(display, request, displayNum);
 }
 
-bool DDCWrite(CGDirectDisplayID displays[], uint32_t num, struct DDCWriteCommand *write) {
+bool DDCWrite(CGDirectDisplayID display, struct DDCWriteCommand *write, UInt64 displayNum) {
     IOI2CRequest    request;
     UInt8           data[128];
 
@@ -171,71 +160,7 @@ bool DDCWrite(CGDirectDisplayID displays[], uint32_t num, struct DDCWriteCommand
     request.replyTransactionType            = kIOI2CNoTransactionType;
     request.replyBytes                      = 0;
 
-    bool result = DisplayRequest(displays, num, &request);
-    return result;
-}
-
-bool DDCRead(CGDirectDisplayID displayID, struct DDCReadCommand *read) {
-    IOI2CRequest request;
-    UInt8 reply_data[11] = {};
-    bool result = false;
-    UInt8 data[128];
-
-    for (int i=1; i<=kMaxRequests; i++) {
-        bzero(&request, sizeof(request));
-
-        request.commFlags                       = 0;
-        request.sendAddress                     = 0x6E;
-        request.sendTransactionType             = kIOI2CSimpleTransactionType;
-        request.sendBuffer                      = (vm_address_t) &data[0];
-        request.sendBytes                       = 5;
-        request.minReplyDelay                   = 10;  // too short can freeze kernel
-
-        data[0] = 0x51;
-        data[1] = 0x82;
-        data[2] = 0x01;
-        data[3] = read->control_id;
-        data[4] = 0x6E ^ data[0] ^ data[1] ^ data[2] ^ data[3];
-        #ifdef TT_SIMPLE
-        request.replyTransactionType    = kIOI2CSimpleTransactionType;
-        #elif defined TT_DDC
-        request.replyTransactionType    = kIOI2CDDCciReplyTransactionType;
-        #else
-        request.replyTransactionType    = SupportedTransactionType();
-        #endif
-        request.replyAddress            = 0x6F;
-        request.replySubAddress         = 0x51;
-
-        request.replyBuffer = (vm_address_t) reply_data;
-        request.replyBytes = sizeof(reply_data);
-
-        result = DisplayRequest(displayID, 1, &request);
-        result = (result && reply_data[0] == request.sendAddress && reply_data[2] == 0x2 && reply_data[4] == read->control_id && reply_data[10] == (request.replyAddress ^ request.replySubAddress ^ reply_data[1] ^ reply_data[2] ^ reply_data[3] ^ reply_data[4] ^ reply_data[5] ^ reply_data[6] ^ reply_data[7] ^ reply_data[8] ^ reply_data[9]));
-
-        if (result) { // checksum is ok
-            if (i > 1) {
-                printf("D: Tries required to get data: %d \n", i);
-            }
-            break;
-        }
-
-        if (request.result == kIOReturnUnsupportedMode)
-        printf("E: Unsupported Transaction Type! \n");
-
-        // reset values and return 0, if data reading fails
-        if (i >= kMaxRequests) {
-            read->success = false;
-            read->max_value = 0;
-            read->current_value = 0;
-            printf("E: No data after %d tries! \n", i);
-            return 0;
-        }
-
-        usleep(40000); // 40msec -> See DDC/CI Vesa Standard - 4.4.1 Communication Error Recovery
-    }
-    read->success = true;
-    read->max_value = reply_data[7];
-    read->current_value = reply_data[9];
+    bool result = DisplayRequest(display, &request, displayNum);
     return result;
 }
 
@@ -345,64 +270,4 @@ UInt32 SupportedTransactionType() {
         }
 
         return supportedType;
-    }
-
-
-    bool EDIDTest(CGDirectDisplayID displayID, struct EDID *edid) {
-        IOI2CRequest request = {};
-        /*! from https://opensource.apple.com/source/IOGraphics/IOGraphics-513.1/IOGraphicsFamily/IOKit/i2c/IOI2CInterface.h.auto.html
-        *  not in https://developer.apple.com/reference/kernel/1659924-ioi2cinterface.h/ioi2crequest?changes=latest_beta&language=objc
-        * @struct IOI2CRequest
-        * @abstract A structure defining an I2C bus transaction.
-        * @discussion This structure is used to request an I2C transaction consisting of a send (write) to and reply (read) from a device, either of which is optional, to be carried out atomically on an I2C bus.
-        * @field __reservedA Set to zero.
-        * @field result The result of the transaction. Common errors are kIOReturnNoDevice if there is no device responding at the given address, kIOReturnUnsupportedMode if the type of transaction is unsupported on the requested bus.
-        * @field completion A completion routine to be executed when the request completes. If NULL is passed, the request is synchronous, otherwise it may execute asynchronously.
-        * @field commFlags Flags that modify the I2C transaction type. The following flags are defined:<br>
-        *      kIOI2CUseSubAddressCommFlag Transaction includes a subaddress.<br>
-        * @field minReplyDelay Minimum delay as absolute time between send and reply transactions.
-        * @field sendAddress I2C address to write.
-        * @field sendSubAddress I2C subaddress to write.
-        * @field __reservedB Set to zero.
-        * @field sendTransactionType The following types of transaction are defined for the send part of the request:<br>
-        *      kIOI2CNoTransactionType No send transaction to perform. <br>
-        *      kIOI2CSimpleTransactionType Simple I2C message. <br>
-        *      kIOI2CCombinedTransactionType Combined format I2C R/~W transaction. <br>
-        * @field sendBuffer Pointer to the send buffer.
-        * @field sendBytes Number of bytes to send. Set to actual bytes sent on completion of the request.
-        * @field replyAddress I2C Address from which to read.
-        * @field replySubAddress I2C Address from which to read.
-        * @field __reservedC Set to zero.
-        * @field replyTransactionType The following types of transaction are defined for the reply part of the request:<br>
-        *      kIOI2CNoTransactionType No reply transaction to perform. <br>
-        *      kIOI2CSimpleTransactionType Simple I2C message. <br>
-        *      kIOI2CDDCciReplyTransactionType DDC/ci message (with embedded length). See VESA DDC/ci specification. <br>
-        *      kIOI2CCombinedTransactionType Combined format I2C R/~W transaction. <br>
-        * @field replyBuffer Pointer to the reply buffer.
-        * @field replyBytes Max bytes to reply (size of replyBuffer). Set to actual bytes received on completion of the request.
-        * @field __reservedD Set to zero.
-        */
-
-        UInt8 data[128] = {};
-        request.sendAddress = 0xA0;
-        request.sendTransactionType = kIOI2CSimpleTransactionType;
-        request.sendBuffer = (vm_address_t) data;
-        request.sendBytes = 0x01;
-        data[0] = 0x00;
-        request.replyAddress = 0xA1;
-        request.replyTransactionType = kIOI2CSimpleTransactionType;
-        request.replyBuffer = (vm_address_t) data;
-        request.replyBytes = sizeof(data);
-        if (!DisplayRequest(displayID, 1, &request)) return false;
-        if (edid) memcpy(edid, &data, 128);
-        UInt32 i = 0;
-        UInt8 sum = 0;
-        while (i < request.replyBytes) {
-            if (i % 128 == 0) {
-                if (sum) break;
-                sum = 0;
-            }
-            sum += data[i++];
-        }
-        return !sum;
     }

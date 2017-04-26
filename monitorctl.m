@@ -51,23 +51,30 @@ void setControlAll(NSInteger control_id, uint new_value)
         else
         fprintf (stdout, "Display %d: { resolution = %dx%d,  scale = %.1f,  freq = %d,  bits/pixel = %d }\n", i, mode.derived.width, mode.derived.height, mode.derived.density, mode.derived.freq, mBitres);
 
-        Log(@"D: setting  display #%u => %u", i, command.control_id, command.new_value);
     }
 
-        if (DDCWrite(displays, nDisplays, &command)) {
-            switch (control_id) {
-                case 16:
-                [NSTask launchedTaskWithLaunchPath:OSDisplay arguments:[NSArray arrayWithObjects: @"-l", [NSString stringWithFormat:@"%u", new_value], @"-i", @"brightness", nil]];
-                break;
-                case 18:
-                [NSTask launchedTaskWithLaunchPath:OSDisplay arguments:[NSArray arrayWithObjects: @"-l", [NSString stringWithFormat:@"%u", new_value], @"-i", @"contrast", nil]];
-                break;
-                default:
-                break;
-            }
-        }else{
-            Log(@"E: Failed to send DDC command!");
+    bool success = 0;
+
+    for (int i=0; i<nDisplays; i++)
+    {
+        Log(@"D: setting  display #%u => %u", i, command.control_id, command.new_value);
+        success = DDCWrite(displays[i], &command, i+1);
+    }
+
+    if (success) {
+        switch (control_id) {
+            case 16:
+            [NSTask launchedTaskWithLaunchPath:OSDisplay arguments:[NSArray arrayWithObjects: @"-l", [NSString stringWithFormat:@"%u", new_value], @"-i", @"brightness", nil]];
+            break;
+            case 18:
+            [NSTask launchedTaskWithLaunchPath:OSDisplay arguments:[NSArray arrayWithObjects: @"-l", [NSString stringWithFormat:@"%u", new_value], @"-i", @"contrast", nil]];
+            break;
+            default:
+            break;
         }
+    }else{
+        Log(@"E: Failed to send DDC command!");
+    }
 
 }
 
