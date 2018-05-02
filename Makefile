@@ -2,7 +2,8 @@
 
 CCFLAGS ?= -O0
 
-# PATH =+
+PREFIX ?= /usr/local/bin
+
 CC = clang
 CXX = clang++
 LD = lld
@@ -14,7 +15,7 @@ monitorctl: DDC.o
 	clang $(CCFLAGS) -Wall -o $@ -lobjc -framework CoreGraphics  -framework IOKit -framework AppKit -framework Foundation $< $@.m
 
 install: monitorctl
-	install monitorctl /usr/local/bin
+	install monitorctl $(PREFIX)
 
 clean:
 	-rm *.o monitorctl
