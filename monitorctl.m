@@ -34,7 +34,7 @@ void setControlAll(NSInteger control_id, uint new_value)
     struct DDCWriteCommand command;
     command.control_id = control_id;
     command.new_value = new_value;
-    NSString *OSDisplay = @"/Applications/OSDisplay.app/Contents/MacOS/OSDisplay";
+    NSString *OSDisplay = @"/Applications/MonitorControl.app/Contents/MacOS/MonitorControl";
     bool interlaced = 0;
 
     for (int i=0; i<nDisplays; i++)
